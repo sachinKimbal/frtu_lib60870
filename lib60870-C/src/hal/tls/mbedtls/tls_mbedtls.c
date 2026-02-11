@@ -412,6 +412,9 @@ TLSConfiguration_create()
             /* additional ciphersuites */
             self->ciphersuites[6] = MBEDTLS_TLS_RSA_WITH_NULL_SHA256;
             self->ciphersuites[7] = MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384;
+
+            /* Mandatory CipherSuites */
+            self->ciphersuites[8] = MBEDTLS_TLS_RSA_WITH_AES_128_CBC_SHA;
         }
     }
 
