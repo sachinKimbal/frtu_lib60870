@@ -159,7 +159,6 @@ MessageQueue_create(int maxQueueSize)
 
     if (self)
     {
-
         self->size = maxQueueSize * (sizeof(struct sMessageQueueEntryInfo) + 256);
 
         DEBUG_PRINT("CS104 SLAVE: event queue buffer size: %i bytes\n", self->size);
@@ -181,7 +180,6 @@ MessageQueue_destroy(MessageQueue self)
 {
     if (self != NULL)
     {
-
 #if (CONFIG_USE_SEMAPHORES == 1)
         Semaphore_destroy(self->queueLock);
 #endif
@@ -234,7 +232,6 @@ MessageQueue_countEntriesUntilEndOfBuffer(MessageQueue self, uint8_t* firstEntry
 
     while (entryPtr)
     {
-
         struct sMessageQueueEntryInfo entryInfo;
 
         memcpy(&entryInfo, entryPtr, sizeof(struct sMessageQueueEntryInfo));
@@ -999,7 +996,6 @@ CS104_IPAddress_equals(CS104_IPAddress self, CS104_IPAddress other)
 
 struct sCS104_RedundancyGroup
 {
-
     char* name; /**< name of the group to be shown in debug messages, or NULL */
 
     MessageQueue asduQueue;                    /**< low priority ASDU queue and buffer */
@@ -1233,6 +1229,9 @@ struct sCS104_Slave
     ServerSocket serverSocket;
 
     LinkedList plugins;
+
+    IEC60870_5_TypeID* supportedTypeIds;
+    uint8_t supportedTypeIdCount;
 };
 
 typedef struct
@@ -1500,6 +1499,9 @@ createSlave(int maxLowPrioQueueSize, int maxHighPrioQueueSize)
         self->serverMode = CS104_MODE_CONNECTION_IS_REDUNDANCY_GROUP;
 #endif
 #endif
+
+        self->supportedTypeIds = NULL;
+        self->supportedTypeIdCount = 0;
     }
 
     return self;
@@ -1656,7 +1658,6 @@ CS104_Slave_activate(CS104_Slave self, MasterConnection connectionToActivate)
 #if (CONFIG_CS104_SUPPORT_SERVER_MODE_SINGLE_REDUNDANCY_GROUP == 1)
     if (self->serverMode == CS104_MODE_SINGLE_REDUNDANCY_GROUP)
     {
-
         /* Deactivate all other connections */
 #if (CONFIG_USE_SEMAPHORES == 1)
         Semaphore_wait(self->openConnectionsLock);
@@ -1684,7 +1685,6 @@ CS104_Slave_activate(CS104_Slave self, MasterConnection connectionToActivate)
 
     if (self->serverMode == CS104_MODE_MULTIPLE_REDUNDANCY_GROUPS)
     {
-
         /* Deactivate all other connections of the same redundancy group */
 #if (CONFIG_USE_SEMAPHORES == 1)
         Semaphore_wait(self->openConnectionsLock);
@@ -2009,7 +2009,6 @@ sendASDUInternal(MasterConnection self, CS101_ASDU asdu)
 
         if (isSentBufferFull(self) == false)
         {
-
             FrameBuffer frameBuffer;
 
             struct sBufferFrame bufferFrame;
@@ -2076,6 +2075,38 @@ isBroadcastCA(CS104_Slave self, int ca)
     return false;
 }
 
+void
+CS104_Slave_setSupportedASDUTypes(CS104_Slave self, IEC60870_5_TypeID* typeIds, int numberOfTypeIds)
+{
+    if (self->supportedTypeIds)
+        GLOBAL_FREEMEM(self->supportedTypeIds);
+
+    self->supportedTypeIds = (IEC60870_5_TypeID*)GLOBAL_MALLOC(numberOfTypeIds * sizeof(IEC60870_5_TypeID));
+
+    if (self->supportedTypeIds)
+    {
+        memcpy(self->supportedTypeIds, typeIds, numberOfTypeIds * sizeof(IEC60870_5_TypeID));
+        self->supportedTypeIdCount = numberOfTypeIds;
+    }
+}
+
+static bool
+isTypeIdSupported(CS104_Slave self, IEC60870_5_TypeID typeId)
+{
+    if (self->supportedTypeIds == NULL)
+        return true; /* if supportedTypeIds is not set, all types are supported */
+
+    int i;
+
+    for (i = 0; i < self->supportedTypeIdCount; i++)
+    {
+        if (self->supportedTypeIds[i] == typeId)
+            return true;
+    }
+
+    return false;
+}
+
 /*
  * Handle received ASDUs
  *
@@ -2092,6 +2123,14 @@ handleASDU(MasterConnection self, CS101_ASDU asdu)
 
     int ca = CS101_ASDU_getCA(asdu);
 
+    // First check for the supported typeId
+    if (isTypeIdSupported(slave, CS101_ASDU_getTypeID(asdu)) == false)
+    {
+        DEBUG_PRINT("CS104 SLAVE: Rcvd ASDU with unsupported Type ID %i\n", CS101_ASDU_getTypeID(asdu));
+        responseNegative(asdu, self, CS101_COT_UNKNOWN_TYPE_ID);
+        return true;
+    }
+
     /* check with user callback if CA address is known/used by application */
     if (slave->isCAAllowedHandler && (isBroadcastCA(slave, ca) == false))
     {
@@ -2103,6 +2142,12 @@ handleASDU(MasterConnection self, CS101_ASDU asdu)
 
             return true;
         }
+    }
+
+    if (CS101_ASDU_isNegative(asdu))
+    {
+        responseNegative(asdu, self, CS101_COT_UNKNOWN_COT);
+        return false;
     }
 
     /* call plugins */
@@ -2127,7 +2172,6 @@ handleASDU(MasterConnection self, CS101_ASDU asdu)
 
     switch (CS101_ASDU_getTypeID(asdu))
     {
-
     case C_IC_NA_1: /* 100 - interrogation command */
 
         DEBUG_PRINT("CS104 SLAVE: Rcvd interrogation command C_IC_NA_1\n");
@@ -2520,6 +2564,15 @@ handleASDU(MasterConnection self, CS101_ASDU asdu)
         break;
     }
 
+    if (isBroadcastCA(slave, ca) == true)
+    {
+        DEBUG_PRINT("CS104_SLAVE: command with broadcast CA not allowed\n");
+
+        responseNegative(asdu, self, CS101_COT_UNKNOWN_CA);
+
+        return true;
+    }
+
     if ((messageHandled == false) && (slave->asduHandler != NULL))
         if (slave->asduHandler(slave->asduHandlerParameter, &(self->iMasterConnection), asdu))
             messageHandled = true;
@@ -2853,7 +2906,6 @@ handleMessage(MasterConnection self, uint8_t* buffer, int msgSize)
 #endif
             if (frameSendSequenceNumber != self->receiveCount)
             {
-
 #if (CONFIG_USE_SEMAPHORES == 1)
                 Semaphore_post(self->stateLock);
 #endif
@@ -3075,7 +3127,6 @@ MasterConnection_destroy(MasterConnection self)
 {
     if (self)
     {
-
         GLOBAL_FREEMEM(self->sentASDUs);
 
 #if (CONFIG_USE_SEMAPHORES == 1)
@@ -3188,7 +3239,6 @@ sendWaitingASDUs(MasterConnection self)
     /* send all available high priority ASDUs first */
     while (HighPriorityASDUQueue_isAsduAvailable(self->highPrioQueue))
     {
-
         if (sendNextHighPriorityASDU(self) == false)
             return true;
 
@@ -3221,7 +3271,6 @@ handleTimeouts(MasterConnection self)
     {
         if (writeToSocket(self, TESTFR_ACT_MSG, TESTFR_ACT_MSG_SIZE) < 0)
         {
-
             DEBUG_PRINT("CS104 SLAVE: Failed to write TESTFR ACT message\n");
 #if (CONFIG_USE_SEMAPHORES == 1)
             Semaphore_wait(self->stateLock);
@@ -3263,7 +3312,6 @@ handleTimeouts(MasterConnection self)
     /* check timeout for others station I messages */
     if (self->unconfirmedReceivedIMessages > 0)
     {
-
         /* Check validity of last confirmation time */
         if (self->lastConfirmationTime != UINT64_MAX && self->lastConfirmationTime > currentTime)
         {
@@ -3294,7 +3342,6 @@ handleTimeouts(MasterConnection self)
     /* check if counterpart confirmed I message */
     if (self->oldestSentASDU != -1)
     {
-
         /* check validity of sent time */
 
         if (self->sentASDUs[self->oldestSentASDU].sentTime > currentTime)
@@ -3305,7 +3352,6 @@ handleTimeouts(MasterConnection self)
 
         if (currentTime > self->sentASDUs[self->oldestSentASDU].sentTime)
         {
-
             if ((currentTime - self->sentASDUs[self->oldestSentASDU].sentTime) >=
                 (uint64_t)(self->slave->conParameters.t1 * 1000))
             {
@@ -4402,7 +4448,7 @@ serverThread(void* parameter)
         else
             Thread_sleep(10);
 
-            /* check if there are connections to close */
+        /* check if there are connections to close */
 #if (CONFIG_USE_SEMAPHORES == 1)
         Semaphore_wait(self->openConnectionsLock);
 #endif
@@ -4791,7 +4837,6 @@ CS104_Slave_stop(CS104_Slave self)
 
             for (i = 0; i < CONFIG_CS104_MAX_CLIENT_CONNECTIONS; i++)
             {
-
 #if (CONFIG_USE_SEMAPHORES == 1)
                 Semaphore_wait(self->openConnectionsLock);
 #endif
@@ -4906,6 +4951,11 @@ CS104_Slave_destroy(CS104_Slave self)
         if (self->plugins)
         {
             LinkedList_destroyStatic(self->plugins);
+        }
+
+        if (self->supportedTypeIds)
+        {
+            GLOBAL_FREEMEM(self->supportedTypeIds);
         }
 
         GLOBAL_FREEMEM(self);

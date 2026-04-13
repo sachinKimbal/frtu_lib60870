@@ -448,6 +448,12 @@ CS104_RedundancyGroup_destroy(CS104_RedundancyGroup self);
  * @}
  */
 
+/**
+ * @}
+ */
+
+void CS104_Slave_setSupportedASDUTypes(CS104_Slave self, IEC60870_5_TypeID* typeIds, int numberOfTypeIds);
+
 #ifdef __cplusplus
 }
 #endif
