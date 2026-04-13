@@ -1248,6 +1248,8 @@ struct sCS104_Slave
 #ifdef SEC_AUTH_60870_5_7
     SecureEndpoint secureEndpoint;
 #endif
+    IEC60870_5_TypeID* supportedTypeIds;
+    uint8_t supportedTypeIdCount;
 };
 
 typedef struct
@@ -1515,6 +1517,9 @@ createSlave(int maxLowPrioQueueSize, int maxHighPrioQueueSize)
         self->serverMode = CS104_MODE_CONNECTION_IS_REDUNDANCY_GROUP;
 #endif
 #endif
+
+        self->supportedTypeIds = NULL;
+        self->supportedTypeIdCount = 0;
     }
 
     return self;
@@ -1708,7 +1713,6 @@ CS104_Slave_activate(CS104_Slave self, MasterConnection connectionToActivate)
 
     if (self->serverMode == CS104_MODE_MULTIPLE_REDUNDANCY_GROUPS)
     {
-
         /* Deactivate all other connections of the same redundancy group */
 #if (CONFIG_USE_SEMAPHORES == 1)
         Semaphore_wait(self->openConnectionsLock);
@@ -2167,6 +2171,38 @@ isBroadcastCA(CS104_Slave self, int ca)
     return false;
 }
 
+void
+CS104_Slave_setSupportedASDUTypes(CS104_Slave self, IEC60870_5_TypeID* typeIds, int numberOfTypeIds)
+{
+    if (self->supportedTypeIds)
+        GLOBAL_FREEMEM(self->supportedTypeIds);
+
+    self->supportedTypeIds = (IEC60870_5_TypeID*)GLOBAL_MALLOC(numberOfTypeIds * sizeof(IEC60870_5_TypeID));
+
+    if (self->supportedTypeIds)
+    {
+        memcpy(self->supportedTypeIds, typeIds, numberOfTypeIds * sizeof(IEC60870_5_TypeID));
+        self->supportedTypeIdCount = numberOfTypeIds;
+    }
+}
+
+static bool
+isTypeIdSupported(CS104_Slave self, IEC60870_5_TypeID typeId)
+{
+    if (self->supportedTypeIds == NULL)
+        return true; /* if supportedTypeIds is not set, all types are supported */
+
+    int i;
+
+    for (i = 0; i < self->supportedTypeIdCount; i++)
+    {
+        if (self->supportedTypeIds[i] == typeId)
+            return true;
+    }
+
+    return false;
+}
+
 /*
  * Handle received ASDUs
  *
@@ -2182,6 +2218,14 @@ handleASDU(MasterConnection self, CS101_ASDU asdu, CS101_SlavePlugin callingPlug
     CS104_Slave slave = self->slave;
 
     int ca = CS101_ASDU_getCA(asdu);
+
+    // First check for the supported typeId
+    if (isTypeIdSupported(slave, CS101_ASDU_getTypeID(asdu)) == false)
+    {
+        DEBUG_PRINT("CS104 SLAVE: Rcvd ASDU with unsupported Type ID %i\n", CS101_ASDU_getTypeID(asdu));
+        responseNegative(asdu, self, CS101_COT_UNKNOWN_TYPE_ID);
+        return true;
+    }
 
     /* check with user callback if CA address is known/used by application */
     if (slave->isCAAllowedHandler && (isBroadcastCA(slave, ca) == false))
@@ -2233,6 +2277,12 @@ handleASDU(MasterConnection self, CS101_ASDU asdu, CS101_SlavePlugin callingPlug
     }
 #endif /* SEC_AUTH_60870_5_7 */
 
+    if (CS101_ASDU_isNegative(asdu))
+    {
+        responseNegative(asdu, self, CS101_COT_UNKNOWN_COT);
+        return false;
+    }
+
     /* call plugins */
     if (slave->plugins)
     {
@@ -2264,7 +2314,6 @@ handleASDU(MasterConnection self, CS101_ASDU asdu, CS101_SlavePlugin callingPlug
 
     switch (CS101_ASDU_getTypeID(asdu))
     {
-
     case C_IC_NA_1: /* 100 - interrogation command */
 
         DEBUG_PRINT("CS104 SLAVE: Rcvd interrogation command C_IC_NA_1\n");
@@ -2654,6 +2703,15 @@ handleASDU(MasterConnection self, CS101_ASDU asdu, CS101_SlavePlugin callingPlug
         break;
     }
 
+    if (isBroadcastCA(slave, ca) == true)
+    {
+        DEBUG_PRINT("CS104_SLAVE: command with broadcast CA not allowed\n");
+
+        responseNegative(asdu, self, CS101_COT_UNKNOWN_CA);
+
+        return true;
+    }
+
     if ((messageHandled == false) && (slave->asduHandler != NULL))
         if (slave->asduHandler(slave->asduHandlerParameter, &(self->iMasterConnection), asdu))
             messageHandled = true;
@@ -2993,7 +3051,6 @@ handleMessage(MasterConnection self, uint8_t* buffer, int msgSize)
 #endif
             if (frameSendSequenceNumber != self->receiveCount)
             {
-
 #if (CONFIG_USE_SEMAPHORES == 1)
                 Semaphore_post(self->stateLock);
 #endif
@@ -3543,7 +3600,6 @@ handleTimeouts(MasterConnection self)
 
         if (currentTime > self->sentASDUs[self->oldestSentASDU].sentTime)
         {
-
             if ((currentTime - self->sentASDUs[self->oldestSentASDU].sentTime) >=
                 (uint64_t)(self->slave->conParameters.t1 * 1000))
             {
@@ -5354,6 +5410,11 @@ CS104_Slave_destroy(CS104_Slave self)
         if (self->plugins)
         {
             LinkedList_destroyStatic(self->plugins);
+        }
+
+        if (self->supportedTypeIds)
+        {
+            GLOBAL_FREEMEM(self->supportedTypeIds);
         }
 
         GLOBAL_FREEMEM(self);
