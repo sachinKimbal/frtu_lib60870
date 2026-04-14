@@ -418,6 +418,7 @@ TLSConfiguration_create()
             /* TLS 1.2 cipher suites */
 
             /* mandatory cipher suites by IEC 62351-4:2018 */
+            self->ciphersuites[cipherIndex++] = MBEDTLS_TLS_RSA_WITH_AES_128_CBC_SHA;
             self->ciphersuites[cipherIndex++] = MBEDTLS_TLS_RSA_WITH_AES_128_CBC_SHA256;
             /* self->ciphersuites[cipherIndex++] = MBEDTLS_TLS_DH_RSA_WITH_AES_128_GCM_SHA256; */ /* weak - not
                                                                                                      supported? */

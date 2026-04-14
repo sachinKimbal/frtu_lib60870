@@ -2564,18 +2564,22 @@ handleASDU(MasterConnection self, CS101_ASDU asdu)
         break;
     }
 
-    if (isBroadcastCA(slave, ca) == true)
-    {
-        DEBUG_PRINT("CS104_SLAVE: command with broadcast CA not allowed\n");
-
-        responseNegative(asdu, self, CS101_COT_UNKNOWN_CA);
-
-        return true;
-    }
-
     if ((messageHandled == false) && (slave->asduHandler != NULL))
+    {
+        if (isBroadcastCA(slave, ca) == true)
+        {
+            DEBUG_PRINT("CS104_SLAVE: command with broadcast CA not allowed\n");
+
+            responseNegative(asdu, self, CS101_COT_UNKNOWN_CA);
+
+            return true;
+        }
+        
         if (slave->asduHandler(slave->asduHandlerParameter, &(self->iMasterConnection), asdu))
+        {
             messageHandled = true;
+        }
+    }
 
     if (messageHandled == false)
     {
