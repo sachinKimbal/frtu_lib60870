@@ -501,7 +501,7 @@ CP56Time2a_setFromMsTimestamp(CP56Time2a self, uint64_t timestamp)
     CP56Time2a_setDayOfMonth(self, tmTime.tm_mday);
 
     /* set day of week to 0 = not present */
-    CP56Time2a_setDayOfWeek(self, 0);
+    CP56Time2a_setDayOfWeek(self, tmTime.tm_wday);
 
     CP56Time2a_setMonth(self, tmTime.tm_mon + 1);
 
